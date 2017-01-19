@@ -7,6 +7,9 @@ use Mockery;
 use Mockery\Matcher\MatcherAbstract;
 use Mockery\MockInterface;
 
+const SCOPE_CONSTRUCTOR = 'constructor';
+const SCOPE_FUNCTION = 'function';
+
 if (!function_exists('Mockingbird\stage')) {
     /**
      * Construct a new stage.
