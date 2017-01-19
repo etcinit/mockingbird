@@ -108,7 +108,10 @@ class Stage
                 $this->throwInvalidScopeException($scope);
             }
 
-            $this->scopes[$scope] = array_merge($this->scopes[$scope]);
+            $this->scopes[$scope] = array_merge(
+                $this->scopes[$scope],
+                $mappings
+            );
         } else {
             $this->provided = array_merge($this->provided, $mappings);
         }
@@ -213,7 +216,7 @@ class Stage
                 continue;
             }
 
-            $mock = $this->resolveMock($hint);
+            $mock = $this->resolveMock($hint, $scope);
 
             $resolved[] = $mock;
         }
@@ -279,7 +282,7 @@ class Stage
             if (!array_key_exists($scope, $this->scopes)) {
                 $this->throwInvalidScopeException($scope);
             } elseif (array_key_exists($name, $this->scopes[$scope])) {
-                return $this->scopes[$scope];
+                return $this->scopes[$scope][$name];
             }
         }
 
