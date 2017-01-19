@@ -24,14 +24,16 @@ use ReflectionParameter;
 class Stage
 {
     /**
-     * List of provided mocks.
+     * Table of provided mocks.
      *
      * @var array
      */
     protected $provided;
 
     /**
-     * @var
+     * Table of provided mock in scopes.
+     *
+     * @var array
      */
     protected $scopes;
 
@@ -54,27 +56,34 @@ class Stage
      * For example, scalar types are currently not supported.
      *
      * @param string $target
+     * @param array $overrides
      *
-     * @throws ResolutionException
      * @return mixed
      */
-    public function make($target)
+    public function make($target, array $overrides = [])
     {
         $arguments = $this->getArgumentTypes($target);
 
-        $resolved = $this->mockArguments($arguments);
+        $resolved = $this->mockArguments(
+            $arguments,
+            $overrides,
+            SCOPE_CONSTRUCTOR
+        );
 
         return new $target(...$resolved);
     }
 
     /**
      * Provide a mock or implementation.
+     *
      * Here we do some "magic" to attempt to figure out what the mock
      * implements. In order for mock resolution to be fast, relationships
      * between types and mocks are stored on a hash table ($this->provided).
+     *
      * This means that if you have objects implementing the same interface or
      * that are instances of the same class, then the last object provided
      * will be the one used.
+     *
      * For scenarios where you have two parameters of the same type in the
      * constructor or conflicting interfaces, it is recommended that you build
      * the object manually.
@@ -385,7 +394,8 @@ class Stage
 
         $resolved = $this->mockArguments(
             $reflection->getMethod($methodName)->getParameters(),
-            $arguments
+            $arguments,
+            SCOPE_FUNCTION
         );
 
         return $target->$methodName(...$resolved);
