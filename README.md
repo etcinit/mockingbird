@@ -11,15 +11,28 @@ A DSL for mocking dependencies on PHP unit tests
 - You can provide real/non-mock instances and scalar arguments.
 - Works with Laravel!
 
+## Requirements
+
+- PHP 7 or higher.
+- Composer
+
+## Installation
+
+Run `composer require chromabits/mockingbird` on a Composer project.
+
 ## Quick Example:
 
 ```php
 <?php
 
-include_once __DIR__ . 'vendor/autoload.php';
+include_once __DIR__ . '/../vendor/autoload.php';
 
+// Mockingbird is available as a set of functions, which you can import into
+// your current scope.
 use function Mockingbird\{ stage, on };
 
+// We begin by defining the classes which will act as our dependencies for this
+// example.
 class DependencyA {
     private $prefix;
 
@@ -37,6 +50,8 @@ class DependencyC {
     }
 }
 
+// We also define our service class which will consume these dependencies
+// through constructor-based and method-based dependency injection.
 class Service {
     /**
      * @var DependencyA
@@ -53,7 +68,7 @@ class Service {
     }
 };
 
-// Out Service class has three dependencies, two services injected through the
+// Our Service class has three dependencies, two services injected through the
 // constructor and one passed on the called method. We will build a stage that
 // provides them for us:
 //
