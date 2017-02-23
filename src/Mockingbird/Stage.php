@@ -4,6 +4,7 @@ declare(strict_types = 1);
 
 namespace Mockingbird;
 
+use InvalidArgumentException;
 use LogicException;
 use Mockingbird\Exceptions\ResolutionException;
 use Closure;
@@ -23,11 +24,18 @@ use ReflectionParameter;
 class Stage
 {
     /**
-     * List of provided mocks.
+     * Table of provided mocks.
      *
      * @var array
      */
     protected $provided;
+
+    /**
+     * Table of provided mock in scopes.
+     *
+     * @var array
+     */
+    protected $scopes;
 
     /**
      * Construct an instance of an Impersonator.
@@ -35,6 +43,10 @@ class Stage
     public function __construct()
     {
         $this->provided = [];
+        $this->scopes = [
+            SCOPE_CONSTRUCTOR => [],
+            SCOPE_FUNCTION => [],
+        ];
     }
 
     /**
@@ -44,25 +56,30 @@ class Stage
      * For example, scalar types are currently not supported.
      *
      * @param string $target
+     * @param array $overrides
      *
-     * @throws ResolutionException
      * @return mixed
      */
-    public function make($target)
+    public function make($target, array $overrides = [])
     {
         $arguments = $this->getArgumentTypes($target);
 
-        $resolved = $this->mockArguments($arguments);
+        $resolved = $this->mockArguments(
+            $arguments,
+            $overrides,
+            SCOPE_CONSTRUCTOR
+        );
 
         return new $target(...$resolved);
     }
 
     /**
-     * Provide a mock.
+     * Provide a mock or implementation.
      *
      * Here we do some "magic" to attempt to figure out what the mock
      * implements. In order for mock resolution to be fast, relationships
      * between types and mocks are stored on a hash table ($this->provided).
+     *
      * This means that if you have objects implementing the same interface or
      * that are instances of the same class, then the last object provided
      * will be the one used.
@@ -72,10 +89,11 @@ class Stage
      * the object manually.
      *
      * @param mixed $mock
+     * @param string $scope
      *
      * @return Stage
      */
-    public function provide($mock): Stage
+    public function provide($mock, string $scope = null): Stage
     {
         if (is_string($mock) || is_array($mock)) {
             throw new LogicException(
@@ -83,20 +101,50 @@ class Stage
             );
         }
 
+        $mappings = $this->extractMappings($mock);
+
+        if ($scope !== null) {
+            if (!array_key_exists($scope, $this->scopes)) {
+                $this->throwInvalidScopeException($scope);
+            }
+
+            $this->scopes[$scope] = array_merge(
+                $this->scopes[$scope],
+                $mappings
+            );
+        } else {
+            $this->provided = array_merge($this->provided, $mappings);
+        }
+
+        return $this;
+    }
+
+    /**
+     * Creates a map of all the interfaces and classes a type covers, which is
+     * use for resolving which mock types to use.
+     *
+     * @param mixed $mock
+     *
+     * @return array
+     */
+    protected function extractMappings($mock): array
+    {
         $interfaces = class_implements($mock);
         $parents = class_parents($mock);
 
+        $mappings = [];
+
         foreach ($interfaces as $interface) {
-            $this->provided[$interface] = $mock;
+            $mappings[$interface] = $mock;
         }
 
         foreach ($parents as $parent) {
-            $this->provided[$parent] = $mock;
+            $mappings[$parent] = $mock;
         }
 
-        $this->provided[get_class($mock)] = $mock;
+        $mappings[get_class($mock)] = $mock;
 
-        return $this;
+        return $mappings;
     }
 
     /**
@@ -104,12 +152,13 @@ class Stage
      *
      * @param string $type
      * @param Closure|CallExpectation[] $definition
+     * @param string $scope
      *
      * @return Stage
      */
-    public function mock(string $type, $definition): Stage
+    public function mock(string $type, $definition, string $scope = null): Stage
     {
-        $this->provide(mock($type, $definition));
+        $this->provide(mock($type, $definition), $scope);
 
         return $this;
     }
@@ -137,11 +186,16 @@ class Stage
      *
      * @param ReflectionParameter[] $parameters
      * @param array $overrides
+     * @param string $scope
      *
      * @return array
      * @throws ResolutionException
      */
-    protected function mockArguments(array $parameters, $overrides = []): array
+    protected function mockArguments(
+        array $parameters,
+        array $overrides = [],
+        string $scope = null
+    ): array
     {
         $resolved = [];
 
@@ -156,21 +210,56 @@ class Stage
             }
 
             if (is_null($hint)) {
-                if ($parameter->isDefaultValueAvailable()) {
-                    $resolved[] = $parameter->getDefaultValue();
+                $resolved[] = $this
+                    ->resolveNonHintedArgument($parameter, $scope);
 
-                    continue;
-                }
-
-                throw new ResolutionException();
+                continue;
             }
 
-            $mock = $this->resolveMock($hint);
+            $mock = $this->resolveMock($hint, $scope);
 
             $resolved[] = $mock;
         }
 
         return $resolved;
+    }
+
+    /**
+     * Attempts to resolve non-hinted arguments by looking up provided values
+     * by name or default values.
+     *
+     * @param ReflectionParameter $parameter
+     * @param string|null $scope
+     *
+     * @return mixed
+     * @throws ResolutionException
+     */
+    protected function resolveNonHintedArgument(
+        ReflectionParameter $parameter,
+        string $scope = null
+    ) {
+        $name = '$' . $parameter->getName();
+
+        // First, we attempt to find a scoped definition of the argument.
+        if ($scope !== null) {
+            if (!array_key_exists($scope, $this->scopes)) {
+                $this->throwInvalidScopeException($scope);
+            } elseif (array_key_exists($name, $this->scopes[$scope])) {
+                return $this->scopes[$scope][$name];
+            }
+        }
+
+        // Second, we look up on the global table.
+        if (array_key_exists($name, $this->provided)) {
+            return $this->provided[$name];
+        }
+
+        // Finally, we look for a default value.
+        if ($parameter->isDefaultValueAvailable()) {
+            return $parameter->getDefaultValue();
+        }
+
+        throw new ResolutionException();
     }
 
     /**
@@ -180,17 +269,29 @@ class Stage
      * go ahead an build an empty mock.
      *
      * @param ReflectionClass $type
+     * @param string $scope
      *
-     * @return MockInterface|mixed
+     * @return mixed|MockInterface
      */
-    protected function resolveMock(ReflectionClass $type)
+    protected function resolveMock(ReflectionClass $type, string $scope = null)
     {
         $name = $type->getName();
 
+        // First, we attempt to find a scoped mock.
+        if ($scope !== null) {
+            if (!array_key_exists($scope, $this->scopes)) {
+                $this->throwInvalidScopeException($scope);
+            } elseif (array_key_exists($name, $this->scopes[$scope])) {
+                return $this->scopes[$scope][$name];
+            }
+        }
+
+        // Second, we lookup on the global table.
         if (array_key_exists($name, $this->provided)) {
             return $this->provided[$name];
         }
 
+        // Finally, if we don't have a predefined mock, we create an empty one.
         return $this->buildMock($type);
     }
 
@@ -207,6 +308,47 @@ class Stage
     protected function buildMock(ReflectionClass $type): MockInterface
     {
         return mock($type->getName());
+    }
+
+    /**
+     * Throws an exception describing that the provided scope is unknown or
+     * unsupported.
+     *
+     * @param string $scope
+     */
+    protected function throwInvalidScopeException(string $scope)
+    {
+        throw new InvalidArgumentException(vsprintf(
+            'Unknown or unsupported scope "%s" provided.',
+            [$scope]
+        ));
+    }
+
+    /**
+     * Provides the value of a constructor or function argument.
+     *
+     * @param $name
+     * @param $value
+     * @param string $scope
+     *
+     * @return Stage
+     */
+    public function set($name, $value, string $scope = null): Stage
+    {
+        // If a scope is provided, we will set the value in a scope.
+        if ($scope !== null) {
+            if (!array_key_exists($scope, $this->scopes)) {
+                $this->throwInvalidScopeException($scope);
+            }
+
+            $this->scopes[$scope]['$' . $name] = $value;
+
+            return $this;
+        }
+
+        $this->provided['$' . $name] = $value;
+
+        return $this;
     }
 
     /**
@@ -255,7 +397,8 @@ class Stage
 
         $resolved = $this->mockArguments(
             $reflection->getMethod($methodName)->getParameters(),
-            $arguments
+            $arguments,
+            SCOPE_FUNCTION
         );
 
         return $target->$methodName(...$resolved);

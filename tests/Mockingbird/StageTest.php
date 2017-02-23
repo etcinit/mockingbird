@@ -7,6 +7,7 @@ use Mockery as m;
 use Mockery\MockInterface;
 use Mockingbird\Exceptions\ResolutionException;
 use function Mockingbird\{ stage, on, mock, self };
+use const Mockingbird\{ SCOPE_CONSTRUCTOR, SCOPE_FUNCTION };
 use PHPUnit_Framework_TestCase;
 use Tests\Mockingbird\ExampleService\ExampleA;
 use Tests\Mockingbird\ExampleService\ExampleAInterface;
@@ -14,6 +15,7 @@ use Tests\Mockingbird\ExampleService\ExampleB;
 use Tests\Mockingbird\ExampleService\ExampleC;
 use Tests\Mockingbird\ExampleService\ExampleD;
 use Tests\Mockingbird\ExampleService\ExampleE;
+use Tests\Mockingbird\ExampleService\ExampleF;
 
 /**
  * Class StageTest.
@@ -133,5 +135,39 @@ class StageTest extends PHPUnit_Framework_TestCase
 
         $this->assertEquals('hello world', $result1);
         $this->assertEquals('hi friend', $result2);
+    }
+
+    public function testMakeAndCallWithScope()
+    {
+        $result = stage()
+            ->mock(ExampleA::class, [
+                on('sayHello', [], 'a')
+            ], SCOPE_CONSTRUCTOR)
+            ->mock(ExampleA::class, [on('sayHello', [], 'b')], SCOPE_FUNCTION)
+            ->makeAndCall(ExampleF::class, 'getOne');
+
+        $this->assertEquals('b', $result);
+
+        $result = stage()
+            ->mock(ExampleA::class, [on('sayHello', [], 'a')])
+            ->mock(ExampleA::class, [on('sayHello', [], 'b')], SCOPE_FUNCTION)
+            ->makeAndCall(ExampleF::class, 'getOne');
+
+        $this->assertEquals('b', $result);
+
+        $result = stage()
+            ->mock(ExampleA::class, [on('sayHello', [], 'a')])
+            ->mock(ExampleA::class, [
+                on('sayHello', [], 'b'),
+            ], SCOPE_CONSTRUCTOR)
+            ->makeAndCall(ExampleF::class, 'getOne');
+
+        $this->assertEquals('a', $result);
+
+        stage()
+            ->mock(ExampleA::class, [
+                on('sayHello', [], 'b'),
+            ], SCOPE_CONSTRUCTOR)
+            ->make(ExampleF::class);
     }
 }
